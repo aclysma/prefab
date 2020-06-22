@@ -58,13 +58,10 @@ impl Prefab {
         let prefab_meta = PrefabMeta {
             id: *uuid::Uuid::new_v4().as_bytes(),
             prefab_refs: Default::default(),
-            entities: Default::default()
+            entities: Default::default(),
         };
 
-        Prefab {
-            world,
-            prefab_meta
-        }
+        Prefab { world, prefab_meta }
     }
 
     pub fn prefab_id(&self) -> PrefabUuid {
@@ -161,11 +158,14 @@ impl StorageDeserializer for PrefabFormatDeserializer<'_> {
                     component_type
                 ))
             })?;
+
+        //TODO: propagate error
         (registered.deserialize_single_fn)(
             &mut erased_serde::Deserializer::erase(deserializer),
             &mut prefab.world,
             entity,
-        );
+        )
+        .unwrap();
         Ok(())
     }
     fn begin_prefab_ref(
@@ -240,16 +240,8 @@ impl Serialize for Prefab {
                 )
             }));
         let comp_types = HashMap::from_iter(
-            crate::registration::iter_component_registrations().map(|reg| {
-                (
-                    ComponentTypeId(
-                        reg.ty(),
-                        #[cfg(feature = "ffi")]
-                        0,
-                    ),
-                    reg.clone(),
-                )
-            }),
+            crate::registration::iter_component_registrations()
+                .map(|reg| (reg.component_type_id(), reg.clone())),
         );
 
         // Providing this map ensures that UUIDs are preserved across serialization/deserialization
@@ -338,10 +330,7 @@ impl<'de> Deserialize<'de> for Prefab {
         deserializer.deserialize_struct("Prefab", FIELDS, PrefabDeserVisitor)
     }
 }
-struct WorldDeser(
-    World,
-    HashMap<uuid::Bytes, Entity>,
-);
+struct WorldDeser(World, HashMap<uuid::Bytes, Entity>);
 impl<'de> Deserialize<'de> for WorldDeser {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -360,16 +349,8 @@ impl<'de> Deserialize<'de> for WorldDeser {
                 )
             }));
         let comp_types = HashMap::from_iter(
-            crate::registration::iter_component_registrations().map(|reg| {
-                (
-                    ComponentTypeId(
-                        reg.ty(),
-                        #[cfg(feature = "ffi")]
-                        0,
-                    ),
-                    reg.clone(),
-                )
-            }),
+            crate::registration::iter_component_registrations()
+                .map(|reg| (reg.component_type_id(), reg.clone())),
         );
         let deserialize_impl = crate::DeserializeImpl::new(tag_types, comp_types);
 
@@ -396,18 +377,12 @@ impl<'a, 'b> PrefabFormatSerializer<'a, 'b> {
         Self {
             prefab,
             context,
-            type_id_to_uuid: HashMap::from_iter(context.registered_components.iter().map(
-                |(type_id, reg)| {
-                    (
-                        ComponentTypeId(
-                            reg.ty(),
-                            #[cfg(feature = "ffi")]
-                            0,
-                        ),
-                        *type_id,
-                    )
-                },
-            )),
+            type_id_to_uuid: HashMap::from_iter(
+                context
+                    .registered_components
+                    .iter()
+                    .map(|(type_id, reg)| (reg.component_type_id(), *type_id)),
+            ),
         }
     }
 }
