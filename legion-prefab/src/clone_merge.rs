@@ -7,6 +7,7 @@ use std::ops::Range;
 use legion::storage::ComponentIndex;
 use std::hash::BuildHasher;
 use legion::world::{EntityRewrite, Allocate};
+use std::marker::PhantomData;
 
 /// A trivial clone merge impl that does nothing but copy data. All component types must be
 /// cloneable and no type transformations are allowed
@@ -178,7 +179,7 @@ impl SpawnCloneImplHandlerSet {
         let into_type_id = ComponentTypeId::of::<IntoT>();
         let into_type_meta = ComponentMeta::of::<IntoT>();
 
-        let handler = Box::new(SpawnCloneImplMappingImpl::new(
+        let handler = Box::new(SpawnCloneImplMappingImpl::<_, IntoT>::new(
             into_type_id,
             //into_type_meta,
             |
@@ -248,7 +249,7 @@ impl SpawnCloneImplHandlerSet {
         let into_type_id = ComponentTypeId::of::<IntoT>();
         let into_type_meta = ComponentMeta::of::<IntoT>();
 
-        let handler = Box::new(SpawnCloneImplMappingImpl::new(
+        let handler = Box::new(SpawnCloneImplMappingImpl::<_, IntoT>::new(
             into_type_id,
             //into_type_meta,
             |
@@ -366,7 +367,7 @@ impl SpawnCloneImplHandlerSet {
         let into_type_id = ComponentTypeId::of::<IntoT>();
         let into_type_meta = ComponentMeta::of::<IntoT>();
 
-        let handler = Box::new(SpawnCloneImplMappingImpl::new(
+        let handler = Box::new(SpawnCloneImplMappingImpl::<_, IntoT>::new(
             into_type_id,
             //into_type_meta,
             move |
@@ -505,9 +506,14 @@ impl<'a, 'b, 'c, S: BuildHasher>  legion::world::Merger for SpawnCloneImpl<'a, '
             // registered in the component registrations
             let handler = &self.handler_set.handlers.get(&component_type);
             if let Some(handler) = handler {
-                let dst_type_id = handler.dst_type_id();
-                let comp_reg = &self.components[&dst_type_id];
-                comp_reg.register_component(&mut dest_layout);
+                handler.register_dst_type(&mut dest_layout);
+                //handler.reg
+                //(handler.dst_type_id(), handler.dst_type_meta())
+                //dest_layout.register_component
+                // let dst_type_id = handler.dst_type_id();
+                // println!("dst_type_id {:?}", dst_type_id);
+                // let comp_reg = &self.components[&dst_type_id];
+                // comp_reg.register_component(&mut dest_layout);
             } else {
                 let comp_reg = &self.components[component_type];
                 comp_reg.register_component(&mut dest_layout);
@@ -563,6 +569,8 @@ trait SpawnCloneImplMapping: Send + Sync {
     fn dst_type_id(&self) -> ComponentTypeId;
     //fn dst_type_meta(&self) -> ComponentMeta;
 
+    fn register_dst_type(&self, entity_layout: &mut EntityLayout);
+
     #[allow(clippy::too_many_arguments)]
     fn clone_components(
         &self,
@@ -583,7 +591,7 @@ trait SpawnCloneImplMapping: Send + Sync {
     );
 }
 
-struct SpawnCloneImplMappingImpl<F>
+struct SpawnCloneImplMappingImpl<F, IntoT>
 where
     F: Fn(
         // &World,                // src_world
@@ -602,13 +610,15 @@ where
         &Components,                // src_components
         &mut ArchetypeWriter,       // dst
     ),
+    IntoT: 'static
 {
     dst_type_id: ComponentTypeId,
     //dst_type_meta: ComponentMeta,
     clone_fn: F,
+    phantom_data: PhantomData<IntoT>
 }
 
-impl<F> SpawnCloneImplMappingImpl<F>
+impl<F, IntoT> SpawnCloneImplMappingImpl<F, IntoT>
 where
     F: Fn(
         // &World,                // src_world
@@ -626,6 +636,7 @@ where
         &Components,                // src_components
         &mut ArchetypeWriter,       // dst
     ),
+    IntoT: 'static
 {
     fn new(
         dst_type_id: ComponentTypeId,
@@ -636,11 +647,12 @@ where
             dst_type_id,
             //dst_type_meta,
             clone_fn,
+            phantom_data: Default::default()
         }
     }
 }
 
-impl<F> SpawnCloneImplMapping for SpawnCloneImplMappingImpl<F>
+impl<F, IntoT> SpawnCloneImplMapping for SpawnCloneImplMappingImpl<F, IntoT>
 where
     F: Fn(
             // &World,                // src_world
@@ -659,6 +671,7 @@ where
             &mut ArchetypeWriter,       // dst
         ) + Send
         + Sync,
+    IntoT: 'static + Send + Sync
 {
     fn dst_type_id(&self) -> ComponentTypeId {
         self.dst_type_id
@@ -667,6 +680,10 @@ where
     // fn dst_type_meta(&self) -> ComponentMeta {
     //     self.dst_type_meta
     // }
+
+    fn register_dst_type(&self, entity_layout: &mut EntityLayout) {
+        entity_layout.register_component::<IntoT>();
+    }
 
     fn clone_components(
         &self,
