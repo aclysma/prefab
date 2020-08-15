@@ -128,10 +128,10 @@ impl<'a> legion::serialize::EntitySerializer for CustomDeserializer<'a> {
         &self,
         deserializer: &mut dyn erased_serde::Deserializer,
     ) -> Result<Entity, erased_serde::Error> {
-        let entity_uuid = <uuid::Bytes as Deserialize>::deserialize(deserializer)?;
+        let entity_uuid = <uuid::Uuid as Deserialize>::deserialize(deserializer)?;
         let mut entity_map = self.entity_map.borrow_mut();
         let entity = entity_map
-            .entry(entity_uuid)
+            .entry(*entity_uuid.as_bytes())
             .or_insert(self.allocator.borrow_mut().next().unwrap());
         Ok(*entity)
     }
