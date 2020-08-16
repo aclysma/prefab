@@ -6,4 +6,5 @@ members = [
 ]
 
 [patch.crates-io]
-legion = { path = "legion" }
+#legion = { path = "legion" }
+legion = { git = "https://github.com/aclysma/legion.git", branch = "legion-0.3-prefab-support" }
