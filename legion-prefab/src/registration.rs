@@ -117,16 +117,32 @@ pub enum DiffSingleResult {
 
 type CompRegisterFn = fn(&mut EntityLayout);
 
-type CompSerializeFn =
-    unsafe fn(*const u8, &mut dyn FnMut(&dyn erased_serde::Serialize));
+type CompSerializeFn = fn(
+    *const u8,
+    &mut dyn FnMut(&dyn erased_serde::Serialize)
+);
+type CompSerializeSliceFn = fn(
+    storage: &dyn UnknownComponentStorage,
+    archetype: ArchetypeIndex,
+    serialize_fn: &mut dyn FnMut(&dyn erased_serde::Serialize)
+);
+
+// type CompDeserializeFn = fn(
+//     storage: &mut UnknownComponentWriter,
+//     deserializer: &mut dyn erased_serde::Deserializer,
+// ) -> Result<(), erased_serde::Error>;
+
 type CompDeserializeFn = fn(
-    storage: &mut UnknownComponentWriter,
+    &mut dyn erased_serde::Deserializer,
+) -> Result<Box<[u8]>, erased_serde::Error>;
+type CompDeserializeSliceFn = fn(
+    storage: UnknownComponentWriter,
     deserializer: &mut dyn erased_serde::Deserializer,
 ) -> Result<(), erased_serde::Error>;
 
-type DeserializeSingleFn = fn(
-    &mut dyn erased_serde::Deserializer,
-) -> Result<Box<[u8]>, erased_serde::Error>;
+// type DeserializeSingleFn = fn(
+//     &mut dyn erased_serde::Deserializer,
+// ) -> Result<Box<[u8]>, erased_serde::Error>;
 type SerializeSingleFn =
     fn(&World, Entity, &mut dyn FnMut(&dyn erased_serde::Serialize));
 
@@ -170,8 +186,11 @@ pub struct ComponentRegistration {
 
     // These are used by legion to serialize worlds
     comp_serialize_fn: CompSerializeFn,
+    comp_serialize_slice_fn: CompSerializeSliceFn,
+    //comp_deserialize_fn: CompDeserializeFn,
     comp_deserialize_fn: CompDeserializeFn,
-    deserialize_single_fn: DeserializeSingleFn,
+    comp_deserialize_slice_fn: CompDeserializeSliceFn,
+    //deserialize_single_fn: DeserializeSingleFn,
 
     // Used by prefab logic
     serialize_single_fn: SerializeSingleFn,
@@ -204,6 +223,7 @@ impl ComponentRegistration {
         (self.register_comp_fn)(layout);
     }
 
+    // Used when serializing a legion world in a human-readable format
     pub unsafe fn comp_serialize(
         &self,
         ptr: *const u8,
@@ -212,21 +232,34 @@ impl ComponentRegistration {
         (self.comp_serialize_fn)(ptr, serialize_fn)
     }
 
-    pub fn comp_deserialize(
+    // Used when serializing a legion world in a non-human-readable format
+    pub unsafe fn comp_serialize_slice(
         &self,
-        storage: &mut UnknownComponentWriter,
-        deserializer: &mut dyn erased_serde::Deserializer,
-    ) -> Result<(), erased_serde::Error> {
-        (self.comp_deserialize_fn)(storage, deserializer)
+        storage: &dyn UnknownComponentStorage,
+        archetype: ArchetypeIndex,
+        serialize_fn: &mut dyn FnMut(&dyn erased_serde::Serialize)
+    ) {
+        (self.comp_serialize_slice_fn)(storage, archetype, serialize_fn)
     }
 
-    pub fn deserialize_single(
+    // Used when deserializing a legion world in a human-readable format
+    pub fn comp_deserialize(
         &self,
         deserializer: &mut dyn erased_serde::Deserializer,
     ) -> Result<Box<[u8]>, erased_serde::Error> {
-        (self.deserialize_single_fn)(deserializer)
+        (self.comp_deserialize_fn)(deserializer)
     }
 
+    // Used when deserializing a legion world in a non-human-readable format
+    pub fn comp_deserialize_slice(
+        &self,
+        storage: UnknownComponentWriter,
+        deserializer: &mut dyn erased_serde::Deserializer,
+    ) -> Result<(), erased_serde::Error> {
+        (self.comp_deserialize_slice_fn)(storage, deserializer)
+    }
+
+    // Used when serializing a single component into prefab format
     pub fn serialize_single(
         &self,
         world: &legion::world::World,
@@ -236,6 +269,7 @@ impl ComponentRegistration {
         (self.serialize_single_fn)(world, entity, serialize);
     }
 
+    // Adds a default instance of the component to the given entity
     pub fn add_default_to_entity(
         &self,
         world: &mut legion::world::World,
@@ -244,6 +278,8 @@ impl ComponentRegistration {
         (self.add_default_to_entity_fn)(world, entity)
     }
 
+    // Used when deserializing a single component from prefab format
+    // Used when applying an "Add" diff command from a transaction to an entity
     pub fn add_to_entity(
         &self,
         deserializer: &mut dyn erased_serde::Deserializer,
@@ -253,6 +289,7 @@ impl ComponentRegistration {
         (self.add_to_entity_fn)(deserializer, world, entity)
     }
 
+    // Used when applying a "Remove" diff command from a transaction to an entity
     pub fn remove_from_entity(
         &self,
         world: &mut legion::world::World,
@@ -261,6 +298,8 @@ impl ComponentRegistration {
         (self.remove_from_entity_fn)(world, entity)
     }
 
+    // Used when creating prefabs
+    // Used for creating "modified" diff commands in a transaction
     pub fn diff_single(
         &self,
         ser: &mut dyn erased_serde::Serializer,
@@ -272,6 +311,8 @@ impl ComponentRegistration {
         (self.diff_single_fn)(ser, src_world, src_entity, dst_world, dst_entity)
     }
 
+    // Used for applying a diff stored in a prefab to an entity specified by an overridden prefab
+    // Used for applying "modified" diff commands in a transaction
     pub fn apply_diff(
         &self,
         de: &mut dyn erased_serde::Deserializer,
@@ -281,6 +322,7 @@ impl ComponentRegistration {
         (self.apply_diff_fn)(de, world, entity);
     }
 
+    // Used to clone components from one world into another
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn clone_components(
         &self,
@@ -318,22 +360,12 @@ impl ComponentRegistration {
                     serialize_fn(&*component_ptr);
                 }
             },
-            comp_deserialize_fn: |
-                storage,
-                deserializer,
-            | {
-                let mut components = erased_serde::deserialize::<Vec<T>>(deserializer)?;
-                unsafe {
-                    let ptr = components.as_ptr();
-                    storage.extend_memcopy_raw(ptr as *const u8, components.len());
-                    components.set_len(0);
-                }
-                Ok(())
+            comp_serialize_slice_fn: |storage, archetype, serialize_fn| unsafe {
+                let (ptr, len) = storage.get_raw(archetype).unwrap();
+                let slice = std::slice::from_raw_parts(ptr as *const T, len);
+                (serialize_fn)(&slice);
             },
-            deserialize_single_fn: |d,
-                                    //world,
-                                    //entity
-            | {
+            comp_deserialize_fn: |d| {
                 let component = erased_serde::deserialize::<T>(d)?;
                 unsafe {
                     let vec = std::slice::from_raw_parts(
@@ -343,6 +375,18 @@ impl ComponentRegistration {
                     std::mem::forget(component);
                     Ok(vec.into_boxed_slice())
                 }
+            },
+            comp_deserialize_slice_fn: |
+                mut storage,
+                deserializer,
+            | {
+                let mut components = erased_serde::deserialize::<Vec<T>>(deserializer)?;
+                unsafe {
+                    let ptr = components.as_ptr();
+                    storage.extend_memcopy_raw(ptr as *const u8, components.len());
+                    components.set_len(0);
+                }
+                Ok(())
             },
             serialize_single_fn: |world, entity, s_fn| {
                 let comp = world
@@ -414,7 +458,7 @@ impl ComponentRegistration {
                 }
             },
             apply_diff_fn: |d, world, entity| {
-                // TODO propagate error
+                //TODO: propagate error
                 let mut e = world
                     .entry(entity)
                     .unwrap();
@@ -454,7 +498,7 @@ impl ComponentRegistration {
                                     world,
                                     entity
             | {
-                // TODO propagate error
+                //TODO: propagate error
                 let comp =
                     erased_serde::deserialize::<T>(d).expect("failed to deserialize component");
                 world.entry(entity).unwrap().add_component(comp);

@@ -74,9 +74,10 @@ impl<'a> legion::serialize::WorldSerializer for CustomSerializer<'a> {
                 });
             }
 
-            return result.take().unwrap();
+            result.take().unwrap()
+        } else {
+            panic!("serialize_component received unserializable type {:?}", ty);
         }
-        panic!("received unserializable type {:?}", ty);
     }
 
     unsafe fn serialize_component_slice<S: Serializer>(
@@ -86,24 +87,24 @@ impl<'a> legion::serialize::WorldSerializer for CustomSerializer<'a> {
         archetype: ArchetypeIndex,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        unimplemented!();
-        // if let Some((_, serialize_fn, _, _, _)) = self.serialize_fns.get(&ty) {
-        //     let mut serializer = Some(serializer);
-        //     let mut result = None;
-        //     let result_ref = &mut result;
-        //     (serialize_fn)(storage, archetype, &mut move |serializable| {
-        //         *result_ref = Some(erased_serde::serialize(
-        //             serializable,
-        //             serializer
-        //                 .take()
-        //                 .expect("serialize can only be called once"),
-        //         ));
-        //     });
-        //     result.unwrap()
-        // } else {
-        //     panic!();
-        // }
+        if let Some(reg) = self.comp_types.get(&ty) {
+            let mut serializer = Some(serializer);
+            let mut result = None;
+            let result_ref = &mut result;
+            reg.comp_serialize_slice(storage, archetype, &mut move |serializable| {
+                *result_ref = Some(erased_serde::serialize(
+                    serializable,
+                    serializer
+                        .take()
+                        .expect("serialize can only be called once"),
+                ));
+            });
+            result.unwrap()
+        } else {
+            panic!("serialize_component_slice received unserializable type {:?}", ty);
+        }
     }
+
     fn with_entity_serializer(&self, callback: &mut dyn FnMut(&dyn EntitySerializer)) {
         callback(self)
     }
@@ -141,8 +142,6 @@ impl<'r> legion::serialize::WorldDeserializer for CustomDeserializer<'r> {
     type TypeId = type_uuid::Bytes;
 
     fn unmap_id(&self, type_id: &Self::TypeId) -> Result<ComponentTypeId, UnknownType> {
-        //self.comp_types_uuid.get(type_id).map(|x| x.component_type_id())
-
         let uuid = self
             .comp_types_uuid
             .get(type_id)
@@ -161,39 +160,6 @@ impl<'r> legion::serialize::WorldDeserializer for CustomDeserializer<'r> {
             .register_component(layout);
     }
 
-    // fn deserialize_insert_component<'de, D: Deserializer<'de>>(
-    //     &self,
-    //     type_id: ComponentTypeId,
-    //     storage: &mut UnknownComponentStorage,
-    //     arch_index: ArchetypeIndex,
-    //     deserializer: D
-    // ) -> Result<(), <D as Deserializer<'de>>::Error> {
-    //     use serde::de::Error;
-    //     let mut erased = erased_serde::Deserializer::erase(deserializer);
-    //     let reg = self.comp_types.get(&type_id).unwrap();
-    //     reg.comp_deserialize(storage, arch_index, &mut erased).map_err(D::Error::custom)
-    // }
-
-    fn deserialize_component_slice<'a, 'de, D: Deserializer<'de>>(
-        &self,
-        type_id: ComponentTypeId,
-        writer: UnknownComponentWriter<'a>,
-        deserializer: D,
-    ) -> Result<(), D::Error> {
-        unimplemented!();
-        //let reg = self.comp_types.get(&type_id).unwrap();
-        //reg.comp_deserialize(writer.st)
-
-        //if let Some((_, _, _, deserialize, _)) = self.serialize_fns.get(&type_id) {
-        //     use serde::de::Error;
-        //     let mut deserializer = erased_serde::Deserializer::erase(deserializer);
-        //     (deserialize)(storage, &mut deserializer).map_err(D::Error::custom)
-        //} else {
-        //Err(D::Error::custom("unrecognized component type"))
-        //    panic!()
-        //}
-    }
-
     fn deserialize_component<'de, D: Deserializer<'de>>(
         &self,
         type_id: ComponentTypeId,
@@ -201,29 +167,30 @@ impl<'r> legion::serialize::WorldDeserializer for CustomDeserializer<'r> {
     ) -> Result<Box<[u8]>, <D as Deserializer<'de>>::Error> {
         use serde::de::Error;
         let mut erased = erased_serde::Deserializer::erase(deserializer);
-        let reg = self.comp_types.get(&type_id).unwrap();
-        reg.deserialize_single(&mut erased)
-            .map_err(D::Error::custom)
+        if let Some(reg) = self.comp_types.get(&type_id) {
+            reg.comp_deserialize(&mut erased)
+                .map_err(D::Error::custom)
+        } else {
+            panic!("deserialize_component received undeserializable type {:?}", type_id);
+        }
     }
+
+    fn deserialize_component_slice<'a, 'de, D: Deserializer<'de>>(
+        &self,
+        type_id: ComponentTypeId,
+        writer: UnknownComponentWriter<'a>,
+        deserializer: D,
+    ) -> Result<(), D::Error> {
+        if let Some(reg) = self.comp_types.get(&type_id) {
+            use serde::de::Error;
+            let mut deserializer = erased_serde::Deserializer::erase(deserializer);
+            reg.comp_deserialize_slice(writer, &mut deserializer).map_err(D::Error::custom)
+        } else {
+            panic!("deserialize_component_slice received undeserializable type {:?}", type_id);
+        }
+    }
+
     fn with_entity_serializer(&self, callback: &mut dyn FnMut(&dyn EntitySerializer)) {
         callback(self)
     }
 }
-
-// pub struct CustomDeserializerSeed<'a> {
-//     pub deserializer: &'a CustomDeserializer,
-// }
-//
-// impl<'de, 'a> DeserializeSeed<'de> for CustomDeserializerSeed<'a> {
-//     type Value = World;
-//
-//     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-//         where
-//             D: serde::Deserializer<'de>,
-//     {
-//         legion::serialize::DeserializeNewWorld::
-//
-//         let wrapped = legion::serialize::UniverseDeserializerWrapper(self.deserializer);
-//         wrapped.deserialize(deserializer)
-//     }
-// }
