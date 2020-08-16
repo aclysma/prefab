@@ -357,16 +357,36 @@ impl ComponentRegistration {
             },
             diff_single_fn: |ser, src_world, src_entity, dst_world, dst_entity| {
                 // TODO propagate error
-                let src_comp = src_entity.and_then(|e| src_world.entry_ref(e));//.get_component::<T>());
-                let dst_comp = dst_entity.and_then(|e| dst_world.entry_ref(e));//.get_component::<T>());
+                let src_entity = src_entity.and_then(|e| src_world.entry_ref(e));
+                let dst_entity = dst_entity.and_then(|e| dst_world.entry_ref(e));
 
-                if let (Some(src_comp), Some(dst_comp)) = (&src_comp, &dst_comp) {
+                let src_comp = if let Some(src_entity) = &src_entity {
+                    if let Ok(src_comp) = src_entity.get_component::<T>() {
+                        Some(src_comp)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let dst_comp = if let Some(dst_entity) = &dst_entity {
+                    if let Ok(dst_comp) = dst_entity.get_component::<T>() {
+                        Some(dst_comp)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let (Some(src_comp), Some(dst_comp)) = (src_comp, dst_comp) {
                     //
                     // Component exists before and after the change. If differences exist, serialize
                     // a diff and return a Change result. Otherwise, serialize nothing and return
                     // NoChange
                     //
-                    let diff = serde_diff::Diff::serializable(src_comp.get_component::<T>().unwrap(), dst_comp.get_component::<T>().unwrap());
+                    let diff = serde_diff::Diff::serializable(src_comp, dst_comp);
                     <serde_diff::Diff<T> as serde::ser::Serialize>::serialize(&diff, ser)
                         .expect("failed to serialize diff");
 
@@ -379,7 +399,7 @@ impl ComponentRegistration {
                     //
                     // Component was created, serialize the object and return an Add result
                     //
-                    erased_serde::serialize(dst_comp.get_component::<T>().unwrap(), ser).unwrap();
+                    erased_serde::serialize(dst_comp, ser).unwrap();
                     DiffSingleResult::Add
                 } else if src_comp.is_some() {
                     //
