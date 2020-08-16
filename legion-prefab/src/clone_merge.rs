@@ -8,6 +8,7 @@ use legion::storage::ComponentIndex;
 use std::hash::BuildHasher;
 use legion::world::{EntityRewrite, Allocate};
 use std::marker::PhantomData;
+use legion::world::EntityHasher;
 
 /// A trivial clone merge impl that does nothing but copy data. All component types must be
 /// cloneable and no type transformations are allowed
@@ -461,32 +462,38 @@ impl SpawnCloneImplHandlerSet {
 /// providing custom mappings with add_mapping (which takes a closure) and add_mapping_into (which
 /// uses Rust standard library's .into(). If a mapping isn't provided for a type, the component
 /// will be cloned using ComponentRegistration passed in new()
-pub struct SpawnCloneImpl<'a, 'b, 'c, S: BuildHasher> {
+pub struct SpawnCloneImpl<'a, 'b, 'c, 'd, S: BuildHasher> {
     handler_set: &'a SpawnCloneImplHandlerSet,
     components: &'b HashMap<ComponentTypeId, ComponentRegistration, S>,
     resources: &'c Resources,
+    entity_map: &'d HashMap<Entity, Entity, EntityHasher>
 }
 
-impl<'a, 'b, 'c, S: BuildHasher> SpawnCloneImpl<'a, 'b, 'c, S> {
+impl<'a, 'b, 'c, 'd, S: BuildHasher> SpawnCloneImpl<'a, 'b, 'c, 'd, S> {
     /// Creates a new implementation
     pub fn new(
         handler_set: &'a SpawnCloneImplHandlerSet,
         components: &'b HashMap<ComponentTypeId, ComponentRegistration, S>,
         resources: &'c Resources,
+        entity_map: &'d HashMap<Entity, Entity, EntityHasher>
     ) -> Self {
         Self {
             handler_set,
             components,
             resources,
+            entity_map
         }
     }
 }
 
-impl<'a, 'b, 'c, S: BuildHasher>  legion::world::Merger for SpawnCloneImpl<'a, 'b, 'c, S> {
+impl<'a, 'b, 'c, 'd, S: BuildHasher>  legion::world::Merger for SpawnCloneImpl<'a, 'b, 'c, 'd, S> {
     fn prefers_new_archetype() -> bool { false }
 
     /// Indicates how the merger wishes entity IDs to be adjusted while cloning a world.
-    fn entity_map(&mut self) -> EntityRewrite { EntityRewrite::default() }
+    fn entity_map(&mut self) -> EntityRewrite {
+        EntityRewrite::default()
+        //EntityRewrite::Explicit(self.entity_map.clone())
+    }
 
     /// Returns the ID to use in the destination world when cloning the given entity.
     #[inline]
@@ -496,7 +503,11 @@ impl<'a, 'b, 'c, S: BuildHasher>  legion::world::Merger for SpawnCloneImpl<'a, '
         existing: Entity,
         allocator: &mut Allocate,
     ) -> Entity {
-        allocator.next().unwrap()
+        if let Some(e) = self.entity_map.get(&existing) {
+            *e
+        } else {
+            allocator.next().unwrap()
+        }
     }
 
     fn convert_layout(&mut self, source_layout: EntityLayout) -> EntityLayout {
@@ -507,13 +518,6 @@ impl<'a, 'b, 'c, S: BuildHasher>  legion::world::Merger for SpawnCloneImpl<'a, '
             let handler = &self.handler_set.handlers.get(&component_type);
             if let Some(handler) = handler {
                 handler.register_dst_type(&mut dest_layout);
-                //handler.reg
-                //(handler.dst_type_id(), handler.dst_type_meta())
-                //dest_layout.register_component
-                // let dst_type_id = handler.dst_type_id();
-                // println!("dst_type_id {:?}", dst_type_id);
-                // let comp_reg = &self.components[&dst_type_id];
-                // comp_reg.register_component(&mut dest_layout);
             } else {
                 let comp_reg = &self.components[component_type];
                 comp_reg.register_component(&mut dest_layout);

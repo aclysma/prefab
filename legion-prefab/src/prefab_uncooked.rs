@@ -42,7 +42,7 @@ pub struct PrefabMeta {
     /// The other prefabs that this prefab will include, plus the data we will override them with
     pub prefab_refs: HashMap<PrefabUuid, PrefabRef>,
 
-    #[serde(skip)]
+    #[serde(skip, default)]
     // The entities that are stored in this prefab
     pub entities: HashMap<EntityUuid, Entity>,
 }
@@ -277,8 +277,9 @@ impl<'de> Deserialize<'de> for Prefab {
             where
                 V: serde::de::SeqAccess<'de>,
             {
-                let prefab_meta: PrefabMeta = seq.next_element()?.expect("expected prefab_meta");
+                let mut prefab_meta: PrefabMeta = seq.next_element()?.expect("expected prefab_meta");
                 let world = seq.next_element::<WorldDeser>()?.expect("expected world");
+                prefab_meta.entities = world.1;
                 Ok(Prefab {
                     prefab_meta,
                     world: world.0,
@@ -297,8 +298,9 @@ impl<'de> Deserialize<'de> for Prefab {
                         }
                         PrefabField::World => {
                             let world_deser = map.next_value::<WorldDeser>()?;
-                            let prefab_meta =
+                            let mut prefab_meta =
                                 prefab_meta.expect("expected prefab_meta before world");
+                            prefab_meta.entities = world_deser.1;
                             return Ok(Prefab {
                                 prefab_meta,
                                 world: world_deser.0,
